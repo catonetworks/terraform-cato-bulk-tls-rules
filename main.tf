@@ -24,6 +24,18 @@ locals {
   }
 }
 
+# Safety guard: fails plan if the rules list is empty, unless allow_empty_policy
+# is explicitly set. Uses terraform_data so the check runs even with 0 for_each
+# instances, which a precondition on cato_tls_rule.rules itself would skip.
+resource "terraform_data" "guard_empty_policy" {
+  lifecycle {
+    precondition {
+      condition     = var.allow_empty_policy || length(local.tls_rules_data) > 0
+      error_message = "Policy JSON contains 0 rules. If intentional (greenfield/teardown), set allow_empty_policy = true. A truncated or wrong-tenant export would otherwise destroy the entire live policy."
+    }
+  }
+}
+
 resource "cato_tls_section" "sections" {
   for_each = local.sections_data
   at = {
@@ -103,14 +115,14 @@ resource "cato_tls_rule" "rules" {
     {
       application = {
         for k, v in {
-          app_category     = try(length(each.value.rule.application.appCategory), 0) > 0 ? [for cat in each.value.rule.application.appCategory : can(cat.name) ? { name = cat.name } : { id = cat.id }] : null
-          application      = try(length(each.value.rule.application.application), 0) > 0 ? [for app in each.value.rule.application.application : can(app.name) ? { name = app.name } : { id = app.id }] : null
-          custom_app       = try(length(each.value.rule.application.customApp), 0) > 0 ? [for app in each.value.rule.application.customApp : can(app.name) ? { name = app.name } : { id = app.id }] : null
-          custom_category  = try(length(each.value.rule.application.customCategory), 0) > 0 ? [for cat in each.value.rule.application.customCategory : can(cat.name) ? { name = cat.name } : { id = cat.id }] : null
-          domain           = try(length(each.value.rule.application.domain), 0) > 0 ? each.value.rule.application.domain : null
-          fqdn             = try(length(each.value.rule.application.fqdn), 0) > 0 ? each.value.rule.application.fqdn : null
-          ip               = try(length(each.value.rule.application.ip), 0) > 0 ? each.value.rule.application.ip : null
-          subnet           = try(length(each.value.rule.application.subnet), 0) > 0 ? each.value.rule.application.subnet : null
+          app_category    = try(length(each.value.rule.application.appCategory), 0) > 0 ? [for cat in each.value.rule.application.appCategory : can(cat.name) ? { name = cat.name } : { id = cat.id }] : null
+          application     = try(length(each.value.rule.application.application), 0) > 0 ? [for app in each.value.rule.application.application : can(app.name) ? { name = app.name } : { id = app.id }] : null
+          custom_app      = try(length(each.value.rule.application.customApp), 0) > 0 ? [for app in each.value.rule.application.customApp : can(app.name) ? { name = app.name } : { id = app.id }] : null
+          custom_category = try(length(each.value.rule.application.customCategory), 0) > 0 ? [for cat in each.value.rule.application.customCategory : can(cat.name) ? { name = cat.name } : { id = cat.id }] : null
+          domain          = try(length(each.value.rule.application.domain), 0) > 0 ? each.value.rule.application.domain : null
+          fqdn            = try(length(each.value.rule.application.fqdn), 0) > 0 ? each.value.rule.application.fqdn : null
+          ip              = try(length(each.value.rule.application.ip), 0) > 0 ? each.value.rule.application.ip : null
+          subnet          = try(length(each.value.rule.application.subnet), 0) > 0 ? each.value.rule.application.subnet : null
           ip_range = try(length(each.value.rule.application.ipRangeTlsInspectApplication), 0) > 0 ? [for range in each.value.rule.application.ipRangeTlsInspectApplication : {
             from = range.from
             to   = range.to
@@ -118,7 +130,7 @@ resource "cato_tls_rule" "rules" {
           country         = try(length(each.value.rule.application.country), 0) > 0 ? [for country in each.value.rule.application.country : can(country.name) ? { name = country.name } : { id = country.id }] : null
           remote_asn      = try(length(each.value.rule.application.remoteAsn), 0) > 0 ? each.value.rule.application.remoteAsn : null
           global_ip_range = try(length(each.value.rule.application.globalIpRange), 0) > 0 ? [for range in each.value.rule.application.globalIpRange : can(range.name) ? { name = range.name } : { id = range.id }] : null
-          service = try(length(each.value.rule.application.service), 0) > 0 ? [for svc in each.value.rule.application.service : can(svc.name) ? { name = svc.name } : { id = svc.id }] : null
+          service         = try(length(each.value.rule.application.service), 0) > 0 ? [for svc in each.value.rule.application.service : can(svc.name) ? { name = svc.name } : { id = svc.id }] : null
           # custom_service expects a single object, take the first service from the array
           custom_service = try(length(each.value.rule.application.customService), 0) > 0 ? merge(
             {

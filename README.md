@@ -254,15 +254,77 @@ catocli export tls_rules
 
 This command will generate a JSON file containing all your existing TLS Inspection rules and sections in the correct format for this Terraform module.
 
-### Importing Rules into Terraform State
+### Importing Existing Rules into Terraform State (native import blocks)
 
-Once you have the JSON configuration file, you can import the existing rules and sections into Terraform state. This is useful for:
+Once you have the JSON configuration file, you can adopt the existing rules and sections into Terraform state. This is useful for:
 
 - **Brownfield deployments**: Managing existing rules with Terraform
 - **Backup and restore**: Restoring rules to a known good state after unintended changes
 - **State management**: Bringing existing infrastructure under Terraform control
 
-To import the rules into Terraform state:
+There are two ways to do this. All of this module's `for_each` state addresses are keyed by name (rule name, section name), which is exactly what lets both options below line up directly against the exported JSON.
+
+<details>
+<summary>Option A (recommended) — native Terraform import blocks (migration.tf)</summary>
+
+Requires Terraform >= 1.7. Create a one-shot `migration.tf` file beside your module call with one `import` block per resource type:
+
+<details>
+<summary>migration.tf — import blocks for TLS Inspection</summary>
+
+```hcl
+locals {
+  tls_policy = jsondecode(file("./config_data/all_tls_rules_and_sections.json")).data.policy.tlsInspect.policy
+
+  tls_sections = { for s in local.tls_policy.sections : s.section_name => s }
+  tls_rules    = { for r in local.tls_policy.rules : r.rule.name => r.rule }
+}
+
+import {
+  for_each = local.tls_sections
+  to       = module.tls_rules.cato_tls_section.sections[each.key]
+  id       = each.value.section_id
+}
+
+import {
+  for_each = local.tls_rules
+  to       = module.tls_rules.cato_tls_rule.rules[each.key]
+  id       = each.value.id
+}
+
+# cato_bulk_tls_move_rule.all_if_rules — note the resource is labeled
+# "all_if_rules" in this module's main.tf (a leftover from the Internet
+# Firewall module this one was ported from; the resource TYPE is correctly
+# cato_bulk_tls_move_rule) — is plan-time ordering orchestration. It has no
+# live object of its own, so it is never imported; it's created on the first
+# apply after the resources above are adopted. This module has no
+# sub-policy support, so there is nothing else to import.
+```
+
+</details>
+
+Preview the adoption before anything touches state:
+
+```bash
+terraform plan
+```
+
+Expect `N to import, 0 to add, 0 to change, 0 to destroy`. Any non-zero "to change" means the JSON export is stale relative to the live policy — **re-export** (`catocli export tls_rules`) and regenerate the locals above, rather than letting `terraform apply` overwrite the live policy with stale config.
+
+Once the plan is clean, adopt the resources into state:
+
+```bash
+terraform apply
+```
+
+Then delete `migration.tf` — its job is done, and leaving it in place just re-runs the same (no-op) import blocks on every future plan.
+
+</details>
+
+<details>
+<summary>Option B — catocli import tls_rules_to_tf (imperative alternative)</summary>
+
+An imperative alternative to Option A, for when native import blocks aren't practical (e.g. scripting a fully automated onboarding pipeline). Unlike Option A, this mutates Terraform state immediately — there is no plan preview before the import happens.
 
 ```bash
 catocli import tls_rules_to_tf config_data/all_tls_rules_and_sections.json --module-name=module.tls_rules
@@ -271,6 +333,8 @@ catocli import tls_rules_to_tf config_data/all_tls_rules_and_sections.json --mod
 **Parameters:**
 - `config_data/all_tls_rules_and_sections.json`: Path to your exported JSON file
 - `--module-name=module.tls_rules`: The name of your Terraform module instance
+
+</details>
 
 ### Typical Brownfield Workflow
 
@@ -288,10 +352,12 @@ catocli import tls_rules_to_tf config_data/all_tls_rules_and_sections.json --mod
    }
    ```
 
-3. **Import existing state:**
+3. **Adopt existing state (Option A — recommended):** create `migration.tf` with the import blocks shown above, then:
    ```bash
-   catocli import tls_rules_to_tf config_data/all_tls_rules_and_sections.json --module-name=module.tls_rules
+   terraform plan    # preview: expect only "to import"
+   terraform apply   # adopt into state
    ```
+   Delete `migration.tf` afterwards. (Option B: `catocli import tls_rules_to_tf config_data/all_tls_rules_and_sections.json --module-name=module.tls_rules` — imperative, no plan preview.)
 
 4. **Run Terraform plan to verify:**
    ```bash
@@ -481,15 +547,15 @@ These example outputs demonstrate various practical applications:
 ## Requirements
 
 | Name | Version |
-| ---- | ------- |
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.5 |
-| <a name="requirement_cato"></a> [cato](#requirement\_cato) | >= 0.0.70 |
+|------|---------|
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.13 |
+| <a name="requirement_cato"></a> [cato](#requirement\_cato) | >= 0.0.50 |
 
 ## Providers
 
 | Name | Version |
-| ---- | ------- |
-| <a name="provider_cato"></a> [cato](#provider\_cato) | >= 0.0.70 |
+|------|---------|
+| <a name="provider_cato"></a> [cato](#provider\_cato) | >= 0.0.50 |
 
 ## Modules
 
@@ -498,7 +564,7 @@ No modules.
 ## Resources
 
 | Name | Type |
-| ---- | ---- |
+|------|------|
 | [cato_bulk_tls_move_rule.all_if_rules](https://registry.terraform.io/providers/catonetworks/cato/latest/docs/resources/bulk_tls_move_rule) | resource |
 | [cato_tls_rule.rules](https://registry.terraform.io/providers/catonetworks/cato/latest/docs/resources/tls_rule) | resource |
 | [cato_tls_section.sections](https://registry.terraform.io/providers/catonetworks/cato/latest/docs/resources/tls_section) | resource |
@@ -506,14 +572,15 @@ No modules.
 ## Inputs
 
 | Name | Description | Type | Default | Required |
-| ---- | ----------- | ---- | ------- | :------: |
+|------|-------------|------|---------|:--------:|
+| <a name="input_allow_empty_policy"></a> [allow\_empty\_policy](#input\_allow\_empty\_policy) | Safety guard: fail planning when the policy JSON contains 0 rules unless explicitly allowed. Protects against a truncated or wrong-tenant export destroying the live policy. Set true only for intentional greenfield/teardown. | `bool` | `false` | no |
 | <a name="input_section_to_start_after_id"></a> [section\_to\_start\_after\_id](#input\_section\_to\_start\_after\_id) | The ID of the section after which to start adding rules. | `string` | `null` | no |
 | <a name="input_tls_rules_json_file_path"></a> [tls\_rules\_json\_file\_path](#input\_tls\_rules\_json\_file\_path) | Path to the json file containing the ifw rule data. | `string` | n/a | yes |
 
 ## Outputs
 
 | Name | Description |
-| ---- | ----------- |
+|------|-------------|
 | <a name="output_allow_rules"></a> [allow\_rules](#output\_allow\_rules) | List of rules with ALLOW action |
 | <a name="output_block_rules"></a> [block\_rules](#output\_block\_rules) | List of rules with BLOCK action |
 | <a name="output_bulk_move_operation"></a> [bulk\_move\_operation](#output\_bulk\_move\_operation) | Details of the bulk move operation |
