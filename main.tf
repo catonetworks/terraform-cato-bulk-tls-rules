@@ -169,6 +169,10 @@ resource "cato_tls_rule" "rules" {
 
 
   )
+
+  lifecycle {
+    ignore_changes = [at] # create-only positioning; ordering owned by the move resource
+  }
 }
 
 resource "cato_bulk_tls_move_rule" "all_if_rules" {
